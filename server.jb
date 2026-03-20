@@ -1,0 +1,1396 @@
+  
+  process.on('close', (code) => {
+    pool.query('UPDATE projects SET status = $1, pid = NULL WHERE id = $2', ['stopped', projectId]);
+    io.to(`project:${projectId}`).emit('project-stopped', { projectId, code });
+  });
+  
+  await pool.query('UPDATE projects SET status = $1, pid = $2 WHERE id = $3', ['running', process.pid, projectId]);
+  
+  // Store process reference
+  if (!global.projects) global.projects = {};
+  global.projects[projectId] = process;
+}
+
+app.post('/api/projects/:id/start', authenticate, async (req, res) => {
+  const { id } = req.params;
+  
+  const projectResult = await pool.query('SELECT * FROM projects WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+  if (projectResult.rows.length === 0) {
+    return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Project not found' });
+  }
+  
+  const project = projectResult.rows[0];
+  
+  if (project.status === 'running') {
+    return res.status(400).json({ success: false, error: 'ALREADY_RUNNING', message: 'Project is already running' });
+  }
+  
+  try {
+    await startProject(id);
+    res.json({ success: true, data: { status: 'starting' } });
+  } catch (err) {
+    logger.error('Start project error:', err);
+    res.status(500).json({ success: false, error: 'START_FAILED', message: 'Failed to start project' });
+  }
+});
+
+app.post('/api/projects/:id/stop', authenticate, async (req, res) => {
+  const { id } = req.params;
+  
+  const projectResult = await pool.query('SELECT * FROM projects WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+  if (projectResult.rows.length === 0) {
+    return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Project not found' });
+  }
+  
+  const project = projectResult.rows[0];
+  
+  if (global.projects && global.projects[id]) {
+    global.projects[id].kill();
+    delete global.projects[id];
+  }
+  
+  await pool.query('UPDATE projects SET status = $1, pid = NULL WHERE id = $2', ['stopped', id]);
+  
+  res.json({ success: true, data: { status: 'stopped' } });
+});
+
+app.get('/api/projects', authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT p.*, bt.name as template_name 
+       FROM projects p
+       LEFT JOIN bot_templates bt ON p.bot_template_id = bt.id
+       WHERE p.user_id = $1 
+       ORDER BY p.created_at DESC`,
+      [req.user.id]
+    );
+    
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    logger.error('Get projects error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to get projects' });
+  }
+});
+
+app.get('/api/projects/:id', authenticate, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const result = await pool.query(
+      `SELECT p.*, bt.name as template_name, bt.config_fields
+       FROM projects p
+       LEFT JOIN bot_templates bt ON p.bot_template_id = bt.id
+       WHERE p.id = $1 AND p.user_id = $2`,
+      [id, req.user.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Project not found' });
+    }
+    
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    logger.error('Get project error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to get project' });
+  }
+});
+
+app.put('/api/projects/:id/env', authenticate, async (req, res) => {
+  const { id } = req.params;
+  const { env_vars } = req.body;
+  
+  try {
+    await pool.query(
+      'UPDATE projects SET env_vars = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3',
+      [JSON.stringify(env_vars), id, req.user.id]
+    );
+    
+    // Update .env file if project is running
+    if (global.projects && global.projects[id]) {
+      const projectDir = path.join(__dirname, 'projects', id);
+      let envContent = '';
+      for (const [key, value] of Object.entries(env_vars)) {
+        envContent += `${key}=${value}\n`;
+      }
+      await fsPromises.writeFile(path.join(projectDir, '.env'), envContent);
+    }
+    
+    res.json({ success: true, data: { message: 'Environment variables updated' } });
+  } catch (err) {
+    logger.error('Update env error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to update environment variables' });
+  }
+});
+
+app.delete('/api/projects/:id', authenticate, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    // Stop project if running
+    if (global.projects && global.projects[id]) {
+      global.projects[id].kill();
+      delete global.projects[id];
+    }
+    
+    // Delete project directory
+    const projectDir = path.join(__dirname, 'projects', id);
+    if (fs.existsSync(projectDir)) {
+      await fsPromises.rm(projectDir, { recursive: true, force: true });
+    }
+    
+    await pool.query('DELETE FROM projects WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+    
+    res.json({ success: true, data: { message: 'Project deleted' } });
+  } catch (err) {
+    logger.error('Delete project error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to delete project' });
+  }
+});
+
+// ============== ADMIN BOT MANAGEMENT WITH GIT AUTO-SCAN ==============
+
+app.post('/api/admin/bots/scan-repo', authenticate, requireAdmin, async (req, res) => {
+  const { git_url, branch = 'main' } = req.body;
+  
+  if (!git_url) {
+    return res.status(400).json({ success: false, error: 'MISSING_URL', message: 'GitHub URL required' });
+  }
+  
+  try {
+    // Extract owner/repo from GitHub URL
+    const repoMatch = git_url.match(/github\.com\/([^\/]+)\/([^\/\.]+)/);
+    if (!repoMatch) {
+      return res.status(400).json({ success: false, error: 'INVALID_URL', message: 'Invalid GitHub URL' });
+    }
+    
+    const [, owner, repo] = repoMatch;
+    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents?ref=${branch}`;
+    
+    const response = await axios.get(apiUrl, {
+      headers: process.env.GITHUB_TOKEN ? { Authorization: `token ${process.env.GITHUB_TOKEN}` } : {}
+    });
+    
+    const files = response.data;
+    const configFields = [];
+    let envExample = null;
+    let packageJson = null;
+    let readme = null;
+    
+    // Look for .env.example files
+    const envFiles = files.filter(f => 
+      f.name === '.env.example' || 
+      f.name === '.env.sample' || 
+      f.name === '.env.template' || 
+      f.name === 'example.env'
+    );
+    
+    if (envFiles.length > 0) {
+      const envContent = await axios.get(envFiles[0].download_url);
+      const lines = envContent.data.split('\n');
+      
+      for (const line of lines) {
+        const match = line.match(/^([A-Za-z0-9_]+)=/);
+        if (match) {
+          const key = match[1];
+          let type = 'text';
+          let required = true;
+          let defaultValue = '';
+          let description = '';
+          
+          // Check for common patterns
+          if (key.includes('SECRET') || key.includes('KEY') || key.includes('PASSWORD') || key.includes('TOKEN')) {
+            type = 'password';
+          } else if (key.includes('URL') || key.includes('URI')) {
+            type = 'url';
+          } else if (key.includes('PORT')) {
+            type = 'number';
+          }
+          
+          // Try to extract description from comments
+          const commentLine = lines[lines.indexOf(line) - 1];
+          if (commentLine && commentLine.startsWith('#')) {
+            description = commentLine.substring(1).trim();
+          }
+          
+          configFields.push({
+            key,
+            label: key.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase()),
+            type,
+            required,
+            default: defaultValue,
+            description,
+            placeholder: `Enter ${key.toLowerCase().replace(/_/g, ' ')}`
+          });
+        }
+      }
+    }
+    
+    // Check for package.json
+    const packageFile = files.find(f => f.name === 'package.json');
+    if (packageFile) {
+      const packageContent = await axios.get(packageFile.download_url);
+      packageJson = packageContent.data;
+    }
+    
+    // Check for README
+    const readmeFile = files.find(f => f.name.toLowerCase().startsWith('readme'));
+    if (readmeFile) {
+      const readmeContent = await axios.get(readmeFile.download_url);
+      readme = readmeContent.data;
+    }
+    
+    // Extract bot name from README or repo name
+    let botName = repo.replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    if (readme) {
+      const titleMatch = readme.match(/^#\s+(.+)$/m);
+      if (titleMatch) {
+        botName = titleMatch[1];
+      }
+    }
+    
+    // Detect category based on files and content
+    let category = 'other';
+    if (packageJson) {
+      const pkg = typeof packageJson === 'string' ? JSON.parse(packageJson) : packageJson;
+      if (pkg.name && (pkg.name.includes('whatsapp') || pkg.name.includes('wa'))) {
+        category = 'whatsapp';
+      } else if (pkg.name && (pkg.name.includes('telegram') || pkg.name.includes('tg'))) {
+        category = 'telegram';
+      } else if (pkg.name && pkg.name.includes('discord')) {
+        category = 'discord';
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        name: botName,
+        git_url,
+        branch,
+        category,
+        config_fields: configFields,
+        detected_files: {
+          has_env_example: envFiles.length > 0,
+          has_package_json: !!packageJson,
+          has_readme: !!readme
+        },
+        config_fields_count: configFields.length
+      }
+    });
+    
+  } catch (err) {
+    logger.error('Scan repo error:', err);
+    res.status(500).json({ success: false, error: 'SCAN_FAILED', message: 'Failed to scan repository' });
+  }
+});
+
+app.post('/api/admin/bots', authenticate, requireAdmin, async (req, res) => {
+  const { name, description, git_url, branch, category, icon, config_fields, type = 'git' } = req.body;
+  
+  if (!name || !git_url) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Name and Git URL required' });
+  }
+  
+  try {
+    const botId = generateId();
+    
+    await pool.query(
+      `INSERT INTO bot_templates (id, name, description, type, git_url, branch, category, icon, config_fields, author_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [botId, name, description, type, git_url, branch || 'main', category || 'other', icon || null, JSON.stringify(config_fields || []), req.user.id]
+    );
+    
+    await logAudit(req.user.id, 'create_bot', 'bot_template', botId, { name, git_url }, req.ip, req.headers['user-agent']);
+    
+    res.json({ success: true, data: { id: botId, name, message: 'Bot template created successfully' } });
+  } catch (err) {
+    logger.error('Create bot error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to create bot template' });
+  }
+});
+
+app.put('/api/admin/bots/:id', authenticate, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { name, description, git_url, branch, category, icon, config_fields, is_active, is_featured, is_verified } = req.body;
+  
+  try {
+    const updates = [];
+    const values = [];
+    let paramIndex = 1;
+    
+    if (name !== undefined) {
+      updates.push(`name = $${paramIndex}`);
+      values.push(name);
+      paramIndex++;
+    }
+    if (description !== undefined) {
+      updates.push(`description = $${paramIndex}`);
+      values.push(description);
+      paramIndex++;
+    }
+    if (git_url !== undefined) {
+      updates.push(`git_url = $${paramIndex}`);
+      values.push(git_url);
+      paramIndex++;
+    }
+    if (branch !== undefined) {
+      updates.push(`branch = $${paramIndex}`);
+      values.push(branch);
+      paramIndex++;
+    }
+    if (category !== undefined) {
+      updates.push(`category = $${paramIndex}`);
+      values.push(category);
+      paramIndex++;
+    }
+    if (icon !== undefined) {
+      updates.push(`icon = $${paramIndex}`);
+      values.push(icon);
+      paramIndex++;
+    }
+    if (config_fields !== undefined) {
+      updates.push(`config_fields = $${paramIndex}`);
+      values.push(JSON.stringify(config_fields));
+      paramIndex++;
+    }
+    if (is_active !== undefined) {
+      updates.push(`is_active = $${paramIndex}`);
+      values.push(is_active);
+      paramIndex++;
+    }
+    if (is_featured !== undefined) {
+      updates.push(`is_featured = $${paramIndex}`);
+      values.push(is_featured);
+      paramIndex++;
+    }
+    if (is_verified !== undefined) {
+      updates.push(`is_verified = $${paramIndex}`);
+      values.push(is_verified);
+      paramIndex++;
+    }
+    
+    updates.push(`updated_at = NOW()`);
+    values.push(id);
+    
+    await pool.query(`UPDATE bot_templates SET ${updates.join(', ')} WHERE id = $${paramIndex}`, values);
+    
+    await logAudit(req.user.id, 'update_bot', 'bot_template', id, req.body, req.ip, req.headers['user-agent']);
+    
+    res.json({ success: true, data: { message: 'Bot template updated successfully' } });
+  } catch (err) {
+    logger.error('Update bot error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to update bot template' });
+  }
+});
+
+app.delete('/api/admin/bots/:id', authenticate, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    await pool.query('DELETE FROM bot_templates WHERE id = $1', [id]);
+    
+    await logAudit(req.user.id, 'delete_bot', 'bot_template', id, {}, req.ip, req.headers['user-agent']);
+    
+    res.json({ success: true, data: { message: 'Bot template deleted' } });
+  } catch (err) {
+    logger.error('Delete bot error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to delete bot template' });
+  }
+});
+
+// ============== ADMIN USER MANAGEMENT ==============
+
+app.get('/api/admin/users', authenticate, requireAdmin, async (req, res) => {
+  const { search, role, tier, banned, page = 1, limit = 20 } = req.query;
+  
+  try {
+    let query = `
+      SELECT id, username, email, role, coins, subscription_tier, is_verified, is_banned, 
+             total_earned, total_spent, created_at, last_login_date
+      FROM users
+      WHERE 1=1
+    `;
+    const params = [];
+    let paramIndex = 1;
+    
+    if (search) {
+      query += ` AND (username ILIKE $${paramIndex} OR email ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+    if (role && role !== 'all') {
+      query += ` AND role = $${paramIndex}`;
+      params.push(role);
+      paramIndex++;
+    }
+    if (tier && tier !== 'all') {
+      query += ` AND subscription_tier = $${paramIndex}`;
+      params.push(tier);
+      paramIndex++;
+    }
+    if (banned === 'true') {
+      query += ` AND is_banned = true`;
+    } else if (banned === 'false') {
+      query += ` AND is_banned = false`;
+    }
+    
+    query += ` ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(limit, (page - 1) * limit);
+    
+    const result = await pool.query(query, params);
+    
+    const countQuery = `
+      SELECT COUNT(*) FROM users WHERE 1=1
+      ${search ? 'AND (username ILIKE $1 OR email ILIKE $1)' : ''}
+      ${role && role !== 'all' ? `AND role = $${search ? '2' : '1'}` : ''}
+    `;
+    const countParams = [];
+    if (search) countParams.push(`%${search}%`);
+    if (role && role !== 'all') countParams.push(role);
+    
+    const countResult = await pool.query(countQuery, countParams);
+    
+    res.json({
+      success: true,
+      data: {
+        users: result.rows,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: parseInt(countResult.rows[0].count),
+          pages: Math.ceil(countResult.rows[0].count / limit)
+        }
+      }
+    });
+  } catch (err) {
+    logger.error('Admin get users error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to get users' });
+  }
+});
+
+app.get('/api/admin/users/:id', authenticate, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const userResult = await pool.query(
+      `SELECT u.*, 
+              (SELECT COUNT(*) FROM projects WHERE user_id = u.id) as project_count,
+              (SELECT COUNT(*) FROM transactions WHERE user_id = u.id) as transaction_count
+       FROM users u
+       WHERE u.id = $1`,
+      [id]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'User not found' });
+    }
+    
+    const projectsResult = await pool.query(
+      'SELECT id, name, status, created_at FROM projects WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10',
+      [id]
+    );
+    
+    const transactionsResult = await pool.query(
+      'SELECT id, type, amount, balance_after, description, created_at FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20',
+      [id]
+    );
+    
+    res.json({
+      success: true,
+      data: {
+        user: userResult.rows[0],
+        recent_projects: projectsResult.rows,
+        recent_transactions: transactionsResult.rows
+      }
+    });
+  } catch (err) {
+    logger.error('Admin get user error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to get user' });
+  }
+});
+
+app.post('/api/admin/users/:id/coins/grant', authenticate, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { amount, reason } = req.body;
+  
+  if (!amount || amount < 1) {
+    return res.status(400).json({ success: false, error: 'INVALID_AMOUNT', message: 'Valid amount required' });
+  }
+  
+  try {
+    await updateUserCoins(id, amount, 'admin_grant', reason || `Admin grant by ${req.user.username}`, req.user.id);
+    
+    await sendNotification(id, 'coins_granted', '💰 Coins Granted!', `You received ${amount} coins from an admin. ${reason ? `Reason: ${reason}` : ''}`, { amount, reason, admin: req.user.username });
+    await logAudit(req.user.id, 'grant_coins', 'user', id, { amount, reason }, req.ip, req.headers['user-agent']);
+    
+    res.json({ success: true, data: { message: `Granted ${amount} coins to user` } });
+  } catch (err) {
+    logger.error('Grant coins error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to grant coins' });
+  }
+});
+
+app.post('/api/admin/users/:id/ban', authenticate, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { reason, duration_days } = req.body;
+  
+  try {
+    await pool.query(
+      'UPDATE users SET is_banned = true, updated_at = NOW() WHERE id = $1',
+      [id]
+    );
+    
+    // Terminate all sessions
+    if (global.projects) {
+      const userProjects = await pool.query('SELECT id FROM projects WHERE user_id = $1', [id]);
+      for (const project of userProjects.rows) {
+        if (global.projects[project.id]) {
+          global.projects[project.id].kill();
+          delete global.projects[project.id];
+        }
+      }
+    }
+    
+    await sendNotification(id, 'account_banned', '⚠️ Account Banned', `Your account has been banned. ${reason ? `Reason: ${reason}` : ''} ${duration_days ? `Duration: ${duration_days} days` : ''}`, { reason, duration_days });
+    await logAudit(req.user.id, 'ban_user', 'user', id, { reason, duration_days }, req.ip, req.headers['user-agent']);
+    
+    res.json({ success: true, data: { message: 'User banned successfully' } });
+  } catch (err) {
+    logger.error('Ban user error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to ban user' });
+  }
+});
+
+app.post('/api/admin/users/:id/unban', authenticate, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    await pool.query(
+      'UPDATE users SET is_banned = false, updated_at = NOW() WHERE id = $1',
+      [id]
+    );
+    
+    await sendNotification(id, 'account_unbanned', '✅ Account Unbanned', 'Your account has been unbanned. You can now log in again.', {});
+    await logAudit(req.user.id, 'unban_user', 'user', id, {}, req.ip, req.headers['user-agent']);
+    
+    res.json({ success: true, data: { message: 'User unbanned successfully' } });
+  } catch (err) {
+    logger.error('Unban user error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to unban user' });
+  }
+});
+
+app.post('/api/admin/users/:id/impersonate', authenticate, requireSuperAdmin, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const userResult = await pool.query('SELECT id, username, role FROM users WHERE id = $1', [id]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'User not found' });
+    }
+    
+    const token = jwt.sign({ userId: id, impersonatedBy: req.user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    
+    await logAudit(req.user.id, 'impersonate_user', 'user', id, {}, req.ip, req.headers['user-agent']);
+    
+    res.json({ success: true, data: { token, user: userResult.rows[0] } });
+  } catch (err) {
+    logger.error('Impersonate error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to impersonate user' });
+  }
+});
+
+// ============== BULK MESSAGING ==============
+
+app.post('/api/admin/bulk/send', authenticate, requireAdmin, async (req, res) => {
+  const { subject, content, target_filter, scheduled_for } = req.body;
+  
+  if (!subject || !content) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Subject and content required' });
+  }
+  
+  try {
+    const messageId = generateId();
+    
+    await pool.query(
+      `INSERT INTO messages (id, sender_id, subject, content, type, target_filter, scheduled_for, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [messageId, req.user.id, subject, content, 'bulk', JSON.stringify(target_filter || {}), scheduled_for || null, scheduled_for ? 'scheduled' : 'pending']
+    );
+    
+    if (!scheduled_for) {
+      // Send immediately
+      await processBulkMessage(messageId);
+    }
+    
+    await logAudit(req.user.id, 'create_bulk_message', 'message', messageId, { subject, target_filter }, req.ip, req.headers['user-agent']);
+    
+    res.json({ success: true, data: { id: messageId, message: scheduled_for ? 'Message scheduled' : 'Message sending started' } });
+  } catch (err) {
+    logger.error('Create bulk message error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to create bulk message' });
+  }
+});
+
+async function processBulkMessage(messageId) {
+  try {
+    const messageResult = await pool.query('SELECT * FROM messages WHERE id = $1', [messageId]);
+    if (messageResult.rows.length === 0) return;
+    
+    const message = messageResult.rows[0];
+    
+    // Build user query based on filters
+    let userQuery = 'SELECT id FROM users WHERE is_banned = false';
+    const params = [];
+    let paramIndex = 1;
+    
+    const filters = message.target_filter || {};
+    
+    if (filters.role) {
+      userQuery += ` AND role = $${paramIndex}`;
+      params.push(filters.role);
+      paramIndex++;
+    }
+    if (filters.subscription_tier) {
+      userQuery += ` AND subscription_tier = $${paramIndex}`;
+      params.push(filters.subscription_tier);
+      paramIndex++;
+    }
+    if (filters.has_verified) {
+      userQuery += ` AND is_verified = true`;
+    }
+    if (filters.min_coins) {
+      userQuery += ` AND coins >= $${paramIndex}`;
+      params.push(filters.min_coins);
+      paramIndex++;
+    }
+    
+    const usersResult = await pool.query(userQuery, params);
+    let sentCount = 0;
+    
+    for (const user of usersResult.rows) {
+      await sendNotification(user.id, 'bulk_message', message.subject, message.content, { message_id: message.id });
+      sentCount++;
+      
+      // Rate limit to avoid overwhelming
+      if (sentCount % 10 === 0) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    
+    await pool.query(
+      'UPDATE messages SET sent_count = $1, status = $2, sent_at = NOW() WHERE id = $3',
+      [sentCount, 'sent', messageId]
+    );
+    
+    logger.info(`Bulk message ${messageId} sent to ${sentCount} users`);
+  } catch (err) {
+    logger.error('Process bulk message error:', err);
+    await pool.query('UPDATE messages SET status = $1 WHERE id = $2', ['failed', messageId]);
+  }
+}
+
+// ============== AIRDROP SYSTEM ==============
+
+app.post('/api/admin/airdrops', authenticate, requireAdmin, async (req, res) => {
+  const { name, description, coins, total_claims, start_date, end_date } = req.body;
+  
+  if (!name || !coins) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Name and coins required' });
+  }
+  
+  try {
+    const airdropId = generateId();
+    
+    await pool.query(
+      `INSERT INTO airdrops (id, name, description, coins, total_claims, remaining_claims, start_date, end_date, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [airdropId, name, description, coins, total_claims || null, total_claims || null, start_date || null, end_date || null, req.user.id]
+    );
+    
+    await logAudit(req.user.id, 'create_airdrop', 'airdrop', airdropId, { name, coins }, req.ip, req.headers['user-agent']);
+    
+    res.json({ success: true, data: { id: airdropId, name } });
+  } catch (err) {
+    logger.error('Create airdrop error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to create airdrop' });
+  }
+});
+
+app.post('/api/airdrops/:id/claim', authenticate, async (req, res) => {
+  const { id } = req.params;
+  const { claim_code } = req.body;
+  
+  try {
+    const airdropResult = await pool.query(
+      `SELECT * FROM airdrops 
+       WHERE id = $1 
+       AND status = 'active'
+       AND (start_date IS NULL OR start_date <= NOW())
+       AND (end_date IS NULL OR end_date >= NOW())
+       AND (remaining_claims IS NULL OR remaining_claims > 0)`,
+      [id]
+    );
+    
+    if (airdropResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'AIRDROP_NOT_AVAILABLE', message: 'Airdrop not available' });
+    }
+    
+    const airdrop = airdropResult.rows[0];
+    
+    // Check if user already claimed
+    const existingClaim = await pool.query(
+      'SELECT id FROM airdrop_claims WHERE airdrop_id = $1 AND user_id = $2',
+      [id, req.user.id]
+    );
+    
+    if (existingClaim.rows.length > 0) {
+      return res.status(400).json({ success: false, error: 'ALREADY_CLAIMED', message: 'You have already claimed this airdrop' });
+    }
+    
+    // Check claim code if required
+    if (airdrop.claim_codes && airdrop.claim_codes.length > 0 && claim_code) {
+      const codeIndex = airdrop.claim_codes.findIndex(c => c.code === claim_code && !c.used);
+      if (codeIndex === -1) {
+        return res.status(400).json({ success: false, error: 'INVALID_CODE', message: 'Invalid or used claim code' });
+      }
+      
+      airdrop.claim_codes[codeIndex].used = true;
+      await pool.query('UPDATE airdrops SET claim_codes = $1 WHERE id = $2', [JSON.stringify(airdrop.claim_codes), id]);
+    } else if (airdrop.claim_codes && airdrop.claim_codes.length > 0) {
+      return res.status(400).json({ success: false, error: 'CODE_REQUIRED', message: 'Claim code required for this airdrop' });
+    }
+    
+    await pool.query('BEGIN');
+    
+    await pool.query(
+      'INSERT INTO airdrop_claims (id, airdrop_id, user_id, claim_code) VALUES ($1, $2, $3, $4)',
+      [generateId(), id, req.user.id, claim_code || null]
+    );
+    
+    if (airdrop.remaining_claims !== null) {
+      await pool.query('UPDATE airdrops SET remaining_claims = remaining_claims - 1 WHERE id = $1', [id]);
+    }
+    
+    await updateUserCoins(req.user.id, airdrop.coins, 'airdrop_claim', `Claimed ${airdrop.coins} coins from ${airdrop.name} airdrop`, id);
+    
+    await pool.query('COMMIT');
+    
+    await sendNotification(
+      req.user.id,
+      'airdrop_claimed',
+      '🎉 Airdrop Claimed!',
+      `You claimed ${airdrop.coins} coins from ${airdrop.name}!`,
+      { airdrop: airdrop.name, coins: airdrop.coins }
+    );
+    
+    res.json({ success: true, data: { coins: airdrop.coins, message: `Successfully claimed ${airdrop.coins} coins!` } });
+  } catch (err) {
+    await pool.query('ROLLBACK');
+    logger.error('Claim airdrop error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to claim airdrop' });
+  }
+});
+
+app.get('/api/airdrops/active', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, description, coins, total_claims, remaining_claims, 
+              start_date, end_date, claim_codes
+       FROM airdrops 
+       WHERE status = 'active'
+       AND (start_date IS NULL OR start_date <= NOW())
+       AND (end_date IS NULL OR end_date >= NOW())
+       AND (remaining_claims IS NULL OR remaining_claims > 0)
+       ORDER BY created_at DESC`
+    );
+    
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    logger.error('Get active airdrops error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to get airdrops' });
+  }
+});
+
+// ============== REVIEW SYSTEM ==============
+
+app.post('/api/reviews', authenticate, async (req, res) => {
+  const { bot_template_id, rating, comment } = req.body;
+  
+  if (!bot_template_id || !rating || rating < 1 || rating > 5) {
+    return res.status(400).json({ success: false, error: 'INVALID_REQUEST', message: 'Valid bot ID and rating (1-5) required' });
+  }
+  
+  try {
+    const existingResult = await pool.query(
+      'SELECT id FROM reviews WHERE user_id = $1 AND bot_template_id = $2',
+      [req.user.id, bot_template_id]
+    );
+    
+    if (existingResult.rows.length > 0) {
+      await pool.query(
+        'UPDATE reviews SET rating = $1, comment = $2, created_at = NOW() WHERE user_id = $3 AND bot_template_id = $4',
+        [rating, comment, req.user.id, bot_template_id]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO reviews (id, user_id, bot_template_id, rating, comment)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [generateId(), req.user.id, bot_template_id, rating, comment]
+      );
+      
+      // Award coins for first review
+      const userReviewCount = await pool.query(
+        'SELECT COUNT(*) FROM reviews WHERE user_id = $1',
+        [req.user.id]
+      );
+      
+      if (parseInt(userReviewCount.rows[0].count) === 1) {
+        await updateUserCoins(req.user.id, 5, 'review_reward', 'First review bonus', bot_template_id);
+        await sendNotification(req.user.id, 'review_reward', '⭐ Review Reward!', 'You earned 5 coins for your first review!', { coins: 5 });
+      }
+    }
+    
+    res.json({ success: true, data: { message: 'Review submitted successfully' } });
+  } catch (err) {
+    logger.error('Submit review error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to submit review' });
+  }
+});
+
+app.post('/api/reviews/:id/helpful', authenticate, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const result = await pool.query(
+      'UPDATE reviews SET helpful_count = helpful_count + 1 WHERE id = $1 RETURNING user_id',
+      [id]
+    );
+    
+    if (result.rows.length > 0) {
+      // Award 2 coins to review author
+      await updateUserCoins(result.rows[0].user_id, 2, 'helpful_vote', 'Someone found your review helpful', id);
+    }
+    
+    res.json({ success: true, data: { message: 'Marked as helpful' } });
+  } catch (err) {
+    logger.error('Helpful vote error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to mark as helpful' });
+  }
+});
+
+// ============== SUPPORT TICKET SYSTEM ==============
+
+app.post('/api/support/tickets', authenticate, async (req, res) => {
+  const { subject, message, priority = 'normal' } = req.body;
+  
+  if (!subject || !message) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Subject and message required' });
+  }
+  
+  try {
+    const ticketId = generateId();
+    
+    await pool.query(
+      `INSERT INTO support_tickets (id, user_id, subject, message, priority)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [ticketId, req.user.id, subject, message, priority]
+    );
+    
+    await sendNotification(req.user.id, 'ticket_created', '🎫 Support Ticket Created', `Your ticket "${subject}" has been created. We'll respond soon.`, { ticket_id: ticketId });
+    
+    res.json({ success: true, data: { id: ticketId, subject, message: 'Ticket created successfully' } });
+  } catch (err) {
+    logger.error('Create ticket error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to create ticket' });
+  }
+});
+
+app.get('/api/support/tickets', authenticate, async (req, res) => {
+  try {
+    let query = `
+      SELECT t.*, 
+             (SELECT COUNT(*) FROM ticket_replies WHERE ticket_id = t.id) as reply_count
+      FROM support_tickets t
+      WHERE t.user_id = $1
+      ORDER BY t.created_at DESC
+    `;
+    const params = [req.user.id];
+    
+    if (req.user.role === 'admin' || req.user.role === 'superadmin') {
+      query = `
+        SELECT t.*, u.username as user_username,
+               (SELECT COUNT(*) FROM ticket_replies WHERE ticket_id = t.id) as reply_count
+        FROM support_tickets t
+        LEFT JOIN users u ON t.user_id = u.id
+        ORDER BY 
+          CASE t.status 
+            WHEN 'open' THEN 1
+            WHEN 'in_progress' THEN 2
+            ELSE 3
+          END,
+          t.created_at DESC
+      `;
+      params.length = 0;
+    }
+    
+    const result = await pool.query(query, params);
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    logger.error('Get tickets error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to get tickets' });
+  }
+});
+
+app.post('/api/support/tickets/:id/reply', authenticate, async (req, res) => {
+  const { id } = req.params;
+  const { message } = req.body;
+  
+  if (!message) {
+    return res.status(400).json({ success: false, error: 'MISSING_MESSAGE', message: 'Reply message required' });
+  }
+  
+  try {
+    const ticketResult = await pool.query(
+      'SELECT user_id, status FROM support_tickets WHERE id = $1',
+      [id]
+    );
+    
+    if (ticketResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Ticket not found' });
+    }
+    
+    const ticket = ticketResult.rows[0];
+    
+    // Check permissions
+    if (ticket.user_id !== req.user.id && req.user.role !== 'admin' && req.user.role !== 'superadmin') {
+      return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Not authorized to reply to this ticket' });
+    }
+    
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'superadmin';
+    
+    await pool.query(
+      `INSERT INTO ticket_replies (id, ticket_id, user_id, message, is_admin)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [generateId(), id, req.user.id, message, isAdmin]
+    );
+    
+    // Update ticket status
+    if (isAdmin) {
+      await pool.query(
+        'UPDATE support_tickets SET status = $1, updated_at = NOW() WHERE id = $2',
+        ['in_progress', id]
+      );
+      
+      await sendNotification(
+        ticket.user_id,
+        'ticket_reply',
+        '📩 Support Ticket Reply',
+        `Admin replied to your ticket: "${message.substring(0, 100)}..."`,
+        { ticket_id: id }
+      );
+    } else {
+      await pool.query(
+        'UPDATE support_tickets SET status = $1, updated_at = NOW() WHERE id = $2',
+        ['open', id]
+      );
+      
+      // Notify admins
+      const adminResult = await pool.query('SELECT id FROM users WHERE role IN ($1, $2)', ['admin', 'superadmin']);
+      for (const admin of adminResult.rows) {
+        await sendNotification(
+          admin.id,
+          'ticket_reply',
+          '📩 New Ticket Reply',
+          `${req.user.username} replied to ticket: "${message.substring(0, 100)}..."`,
+          { ticket_id: id, user: req.user.username }
+        );
+      }
+    }
+    
+    res.json({ success: true, data: { message: 'Reply sent successfully' } });
+  } catch (err) {
+    logger.error('Ticket reply error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to send reply' });
+  }
+});
+
+// ============== CHAT SYSTEM ==============
+
+app.get('/api/chat/messages', async (req, res) => {
+  const { room = 'general', limit = 50, before } = req.query;
+  
+  try {
+    let query = `
+      SELECT cm.*, u.username, u.avatar, u.badges
+      FROM chat_messages cm
+      LEFT JOIN users u ON cm.user_id = u.id
+      WHERE cm.room = $1
+    `;
+    const params = [room];
+    let paramIndex = 2;
+    
+    if (before) {
+      query += ` AND cm.created_at < $${paramIndex}`;
+      params.push(before);
+      paramIndex++;
+    }
+    
+    query += ` ORDER BY cm.created_at DESC LIMIT $${paramIndex}`;
+    params.push(limit);
+    
+    const result = await pool.query(query, params);
+    res.json({ success: true, data: result.rows.reverse() });
+  } catch (err) {
+    logger.error('Get chat messages error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to get messages' });
+  }
+});
+
+app.post('/api/chat/messages', authenticate, async (req, res) => {
+  const { message, room = 'general' } = req.body;
+  
+  if (!message || message.trim().length === 0) {
+    return res.status(400).json({ success: false, error: 'EMPTY_MESSAGE', message: 'Message cannot be empty' });
+  }
+  
+  if (message.length > 2000) {
+    return res.status(400).json({ success: false, error: 'MESSAGE_TOO_LONG', message: 'Message cannot exceed 2000 characters' });
+  }
+  
+  try {
+    const messageId = generateId();
+    
+    await pool.query(
+      `INSERT INTO chat_messages (id, user_id, username, message, room)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [messageId, req.user.id, req.user.username, message, room]
+    );
+    
+    // Emit to all users in the room
+    io.to(`chat:${room}`).emit('chat-message', {
+      id: messageId,
+      user_id: req.user.id,
+      username: req.user.username,
+      message,
+      room,
+      created_at: new Date(),
+      avatar: req.user.avatar,
+      badges: req.user.badges
+    });
+    
+    res.json({ success: true, data: { id: messageId, message: 'Message sent' } });
+  } catch (err) {
+    logger.error('Send chat message error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to send message' });
+  }
+});
+
+// ============== NOTIFICATION SYSTEM ==============
+
+app.get('/api/notifications', authenticate, async (req, res) => {
+  const { unread_only = false, limit = 50, page = 1 } = req.query;
+  
+  try {
+    let query = `
+      SELECT * FROM notifications 
+      WHERE user_id = $1
+    `;
+    const params = [req.user.id];
+    let paramIndex = 2;
+    
+    if (unread_only === 'true') {
+      query += ` AND is_read = false`;
+    }
+    
+    query += ` ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(limit, (page - 1) * limit);
+    
+    const result = await pool.query(query, params);
+    
+    const countQuery = `
+      SELECT COUNT(*) FROM notifications WHERE user_id = $1
+      ${unread_only === 'true' ? 'AND is_read = false' : ''}
+    `;
+    const countResult = await pool.query(countQuery, [req.user.id]);
+    
+    res.json({
+      success: true,
+      data: {
+        notifications: result.rows,
+        unread_count: unread_only === 'true' ? result.rows.length : await getUnreadCount(req.user.id),
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: parseInt(countResult.rows[0].count),
+          pages: Math.ceil(countResult.rows[0].count / limit)
+        }
+      }
+    });
+  } catch (err) {
+    logger.error('Get notifications error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to get notifications' });
+  }
+});
+
+async function getUnreadCount(userId) {
+  const result = await pool.query(
+    'SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND is_read = false',
+    [userId]
+  );
+  return parseInt(result.rows[0].count);
+}
+
+app.put('/api/notifications/:id/read', authenticate, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    await pool.query(
+      'UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2',
+      [id, req.user.id]
+    );
+    res.json({ success: true, data: { message: 'Notification marked as read' } });
+  } catch (err) {
+    logger.error('Mark notification read error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to mark notification as read' });
+  }
+});
+
+app.put('/api/notifications/read-all', authenticate, async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE notifications SET is_read = true WHERE user_id = $1 AND is_read = false',
+      [req.user.id]
+    );
+    res.json({ success: true, data: { message: 'All notifications marked as read' } });
+  } catch (err) {
+    logger.error('Mark all notifications read error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to mark notifications as read' });
+  }
+});
+
+// ============== API KEY MANAGEMENT ==============
+
+app.post('/api/api-keys', authenticate, async (req, res) => {
+  try {
+    const newApiKey = generateApiKey();
+    
+    await pool.query(
+      'UPDATE users SET api_key = $1 WHERE id = $2',
+      [newApiKey, req.user.id]
+    );
+    
+    await logAudit(req.user.id, 'regenerate_api_key', 'user', req.user.id, {}, req.ip, req.headers['user-agent']);
+    
+    res.json({ success: true, data: { api_key: newApiKey } });
+  } catch (err) {
+    logger.error('Regenerate API key error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to regenerate API key' });
+  }
+});
+
+// ============== PROFILE MANAGEMENT ==============
+
+app.get('/api/profile', authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, username, email, role, coins, subscription_tier, subscription_expiry, 
+              max_projects, total_projects_deployed, is_verified, email_verified,
+              two_factor_enabled, avatar, bio, badges, login_streak, created_at,
+              api_key, referral_code
+       FROM users 
+       WHERE id = $1`,
+      [req.user.id]
+    );
+    
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    logger.error('Get profile error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to get profile' });
+  }
+});
+
+app.put('/api/profile', authenticate, async (req, res) => {
+  const { username, email, bio, avatar } = req.body;
+  
+  try {
+    const updates = [];
+    const values = [];
+    let paramIndex = 1;
+    
+    if (username) {
+      updates.push(`username = $${paramIndex}`);
+      values.push(username);
+      paramIndex++;
+    }
+    if (email !== undefined) {
+      updates.push(`email = $${paramIndex}`);
+      values.push(email);
+      paramIndex++;
+    }
+    if (bio !== undefined) {
+      updates.push(`bio = $${paramIndex}`);
+      values.push(bio);
+      paramIndex++;
+    }
+    if (avatar !== undefined) {
+      updates.push(`avatar = $${paramIndex}`);
+      values.push(avatar);
+      paramIndex++;
+    }
+    
+    updates.push(`updated_at = NOW()`);
+    values.push(req.user.id);
+    
+    await pool.query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex}`, values);
+    
+    res.json({ success: true, data: { message: 'Profile updated successfully' } });
+  } catch (err) {
+    logger.error('Update profile error:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to update profile' });
+  }
+});
+
+// ============== SYSTEM HEALTH & STATS ==============
+
+app.get('/api/system/health', async (req, res) => {
+  try {
+    // Check database
+    await pool.query('SELECT 1');
+    
+    // Get stats
+    const userCount = await pool.query('SELECT COUNT(*) FROM users');
+    const projectCount = await pool.query('SELECT COUNT(*) FROM projects');
+    const runningProjectCount = await pool.query("SELECT COUNT(*) FROM projects WHERE status = 'running'");
+    
+    res.json({
+      success: true,
+      data: {
+        status: 'healthy',
+        timestamp: new Date(),
+        uptime: process.uptime(),
+        database: 'connected',
+        stats: {
+          users: parseInt(userCount.rows[0].count),
+          projects: parseInt(projectCount.rows[0].count),
+          running_projects: parseInt(runningProjectCount.rows[0].count)
+        }
+      }
+    });
+  } catch (err) {
+    logger.error('Health check error:', err);
+    res.status(500).json({ success: false, error: 'UNHEALTHY', message: 'System is unhealthy' });
+  }
+});
+
+// ============== CRON JOBS ==============
+
+// Reset monthly subscription coins
+cron.schedule('0 0 1 * *', async () => {
+  logger.info('Running monthly subscription coin reset');
+  
+  try {
+    const usersResult = await pool.query(`
+      SELECT id, subscription_tier FROM users 
+      WHERE subscription_tier != 'free' 
+      AND (subscription_expiry IS NULL OR subscription_expiry > NOW())
+    `);
+    
+    const tierCoins = {
+      starter: 100,
+      pro: 500,
+      enterprise: 2000,
+      ultimate: 10000
+    };
+    
+    for (const user of usersResult.rows) {
+      const coins = tierCoins[user.subscription_tier];
+      if (coins) {
+        await updateUserCoins(user.id, coins, 'subscription_renewal', `Monthly ${user.subscription_tier.toUpperCase()} subscription bonus`, null);
+        await sendNotification(user.id, 'subscription_renewal', '🔄 Subscription Renewed', `Your monthly ${user.subscription_tier.toUpperCase()} subscription has renewed! You received ${coins} coins.`, { tier: user.subscription_tier, coins });
+      }
+    }
+    
+    logger.info(`Monthly subscription coins awarded to ${usersResult.rows.length} users`);
+  } catch (err) {
+    logger.error('Monthly subscription cron error:', err);
+  }
+});
+
+// Process scheduled bulk messages
+cron.schedule('* * * * *', async () => {
+  try {
+    const messagesResult = await pool.query(`
+      SELECT id FROM messages 
+      WHERE status = 'scheduled' 
+      AND scheduled_for <= NOW()
+    `);
+    
+    for (const message of messagesResult.rows) {
+      await processBulkMessage(message.id);
+    }
+  } catch (err) {
+    logger.error('Process scheduled messages error:', err);
+  }
+});
+
+// Clean up old logs
+cron.schedule('0 0 * * 0', async () => {
+  logger.info('Running log cleanup');
+  
+  try {
+    // Delete notifications older than 90 days
+    await pool.query(`
+      DELETE FROM notifications 
+      WHERE created_at < NOW() - INTERVAL '90 days'
+      AND is_read = true
+    `);
+    
+    // Delete audit logs older than 180 days
+    await pool.query(`
+      DELETE FROM audit_logs 
+      WHERE created_at < NOW() - INTERVAL '180 days'
+    `);
+    
+    logger.info('Log cleanup completed');
+  } catch (err) {
+    logger.error('Log cleanup error:', err);
+  }
+});
+
+// ============== START SERVER ==============
+
+const PORT = process.env.PORT || 3000;
+
+async function startServer() {
+  await initDatabase();
+  
+  // Set default admin if none exists
+  const adminCheck = await pool.query("SELECT id FROM users WHERE role = 'superadmin'");
+  if (adminCheck.rows.length === 0 && process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD) {
+    const hashedPassword = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
+    const adminId = generateId();
+    const adminApiKey = generateApiKey();
+    
+    await pool.query(
+      `INSERT INTO users (id, username, email, password_hash, role, admin_level, referral_code, api_key, coins, max_projects, is_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [adminId, process.env.ADMIN_USERNAME, process.env.ADMIN_EMAIL || 'admin@cloudhost.app', hashedPassword, 'superadmin', 10, generateReferralCode(), adminApiKey, 10000, 999999, true]
+    );
+    
+    logger.info('Default admin user created');
+  }
+  
+  server.listen(PORT, () => {
+    logger.info(`🚀 CloudHost Server running on port ${PORT}`);
+    logger.info(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    logger.info(`👑 Created by Bruce Bera - The Greatest Hosting Platform in Human History`);
+  });
+}
+
+startServer().catch(err => {
+  logger.error('Failed to start server:', err);
+  process.exit(1);
+});
+
+module.exports = { app, server, io };
