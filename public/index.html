@@ -1,0 +1,295 @@
+<!-- public/index.html - Landing Page -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudHost - The Greatest Hosting Platform in Human History</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .feature-card {
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white">
+    <!-- Navigation -->
+    <nav class="bg-gray-800/50 backdrop-blur-lg border-b border-gray-700 sticky top-0 z-50">
+        <div class="container mx-auto px-6 py-4">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center space-x-2">
+                    <div class="w-10 h-10 gradient-bg rounded-lg flex items-center justify-center">
+                        <span class="text-2xl font-bold">C</span>
+                    </div>
+                    <span class="text-2xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">CloudHost</span>
+                </div>
+                <div class="hidden md:flex space-x-8">
+                    <a href="#features" class="hover:text-purple-400 transition">Features</a>
+                    <a href="#pricing" class="hover:text-purple-400 transition">Pricing</a>
+                    <a href="#marketplace" class="hover:text-purple-400 transition">Marketplace</a>
+                    <a href="#contact" class="hover:text-purple-400 transition">Contact</a>
+                </div>
+                <div class="flex space-x-4">
+                    <a href="/login.html" class="px-4 py-2 border border-purple-500 rounded-lg hover:bg-purple-500/20 transition">Login</a>
+                    <a href="/register.html" class="px-4 py-2 gradient-bg rounded-lg hover:opacity-90 transition">Get Started</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-r from-purple-900/20 to-pink-900/20"></div>
+        <div class="container mx-auto px-6 py-24 relative">
+            <div class="text-center max-w-4xl mx-auto">
+                <div class="inline-block px-4 py-1 bg-purple-500/20 rounded-full text-purple-300 text-sm mb-6">
+                    🔥 The Greatest Hosting Platform in Human History
+                </div>
+                <h1 class="text-5xl md:text-7xl font-bold mb-6 bg-gradient-to-r from-purple-400 via-pink-400 to-red-400 bg-clip-text text-transparent">
+                    Deploy Bots in Seconds
+                </h1>
+                <p class="text-xl text-gray-300 mb-8">
+                    The ultimate platform for deploying WhatsApp bots, Telegram bots, APIs, and automation tools.
+                    Starting from just <span class="text-green-400 font-bold">KES 50</span> for 100 coins.
+                </p>
+                <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                    <a href="/register.html" class="px-8 py-4 gradient-bg rounded-lg text-lg font-semibold hover:opacity-90 transition">Start Deploying Now</a>
+                    <a href="#demo" class="px-8 py-4 border border-gray-600 rounded-lg text-lg font-semibold hover:border-purple-500 transition">Watch Demo</a>
+                </div>
+                <p class="mt-6 text-sm text-gray-400">
+                    🆓 FREE tier: 3 projects | ⭐ STARTER: KES 50/mo (4 projects + 100 coins) | 🚀 Each deploy = 25 coins (KES 12.50)
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Stats Section -->
+    <section class="bg-gray-800/50 py-12">
+        <div class="container mx-auto px-6">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+                <div>
+                    <div class="text-4xl font-bold text-purple-400">10,000+</div>
+                    <div class="text-gray-400 mt-2">Bots Deployed</div>
+                </div>
+                <div>
+                    <div class="text-4xl font-bold text-purple-400">5,000+</div>
+                    <div class="text-gray-400 mt-2">Happy Developers</div>
+                </div>
+                <div>
+                    <div class="text-4xl font-bold text-purple-400">50+</div>
+                    <div class="text-gray-400 mt-2">Bot Templates</div>
+                </div>
+                <div>
+                    <div class="text-4xl font-bold text-purple-400">24/7</div>
+                    <div class="text-gray-400 mt-2">Support</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="py-24">
+        <div class="container mx-auto px-6">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold mb-4">Why Choose CloudHost?</h2>
+                <p class="text-gray-400 max-w-2xl mx-auto">Everything you need to deploy, manage, and scale your bots</p>
+            </div>
+            <div class="grid md:grid-cols-3 gap-8">
+                <div class="feature-card bg-gray-800 p-8 rounded-xl">
+                    <div class="w-12 h-12 gradient-bg rounded-lg flex items-center justify-center mb-4">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">One-Click Deploy</h3>
+                    <p class="text-gray-400">Deploy any bot from GitHub with a single click. Our system auto-detects environment variables.</p>
+                </div>
+                <div class="feature-card bg-gray-800 p-8 rounded-xl">
+                    <div class="w-12 h-12 gradient-bg rounded-lg flex items-center justify-center mb-4">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">Affordable Kenyan Pricing</h3>
+                    <p class="text-gray-400">Starting from KES 50 for 100 coins. Each deployment costs just 25 coins (KES 12.50).</p>
+                </div>
+                <div class="feature-card bg-gray-800 p-8 rounded-xl">
+                    <div class="w-12 h-12 gradient-bg rounded-lg flex items-center justify-center mb-4">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">M-Pesa Integration</h3>
+                    <p class="text-gray-400">Pay seamlessly with M-Pesa, Stripe, or Crypto. Instant coin credits.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section id="pricing" class="py-24 bg-gray-800/30">
+        <div class="container mx-auto px-6">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold mb-4">Simple, Transparent Pricing</h2>
+                <p class="text-gray-400">Choose the plan that fits your needs</p>
+            </div>
+            <div class="grid md:grid-cols-3 lg:grid-cols-5 gap-6">
+                <!-- FREE Tier -->
+                <div class="bg-gray-800 rounded-xl p-6 text-center">
+                    <h3 class="text-2xl font-bold mb-2">FREE</h3>
+                    <div class="text-4xl font-bold text-green-400">KES 0</div>
+                    <div class="text-gray-400 text-sm mb-4">/month</div>
+                    <ul class="text-left space-y-2 mb-6">
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>3 Projects</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>0 Monthly Coins</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>25 Coins/Deploy</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>= 3 Deploys/month</li>
+                    </ul>
+                    <a href="/register.html" class="block w-full py-2 bg-gray-700 rounded-lg hover:bg-gray-600 transition">Get Started</a>
+                </div>
+
+                <!-- STARTER Tier -->
+                <div class="bg-gray-800 rounded-xl p-6 text-center border-2 border-green-500 relative">
+                    <div class="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-3 py-1 rounded-full text-xs">BEST DEAL</div>
+                    <h3 class="text-2xl font-bold text-green-400 mb-2">STARTER</h3>
+                    <div class="text-4xl font-bold">KES 50</div>
+                    <div class="text-gray-400 text-sm mb-4">/month</div>
+                    <ul class="text-left space-y-2 mb-6">
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>4 Projects</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>100 Monthly Coins</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>25 Coins/Deploy</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>= 8 Deploys/month</li>
+                    </ul>
+                    <a href="/register.html" class="block w-full py-2 bg-green-600 rounded-lg hover:bg-green-700 transition">Upgrade - KES 50</a>
+                </div>
+
+                <!-- PRO Tier -->
+                <div class="bg-gray-800 rounded-xl p-6 text-center border-2 border-purple-500">
+                    <h3 class="text-2xl font-bold text-purple-400 mb-2">PRO</h3>
+                    <div class="text-4xl font-bold">KES 499</div>
+                    <div class="text-gray-400 text-sm mb-4">/month</div>
+                    <ul class="text-left space-y-2 mb-6">
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>10 Projects</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>500 Monthly Coins</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>= 30 Deploys/month</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Priority Support</li>
+                    </ul>
+                    <a href="/register.html" class="block w-full py-2 bg-purple-600 rounded-lg hover:bg-purple-700 transition">Upgrade - KES 499</a>
+                </div>
+
+                <!-- ENTERPRISE Tier -->
+                <div class="bg-gray-800 rounded-xl p-6 text-center border-2 border-yellow-500">
+                    <h3 class="text-2xl font-bold text-yellow-400 mb-2">ENTERPRISE</h3>
+                    <div class="text-4xl font-bold">KES 1,499</div>
+                    <div class="text-gray-400 text-sm mb-4">/month</div>
+                    <ul class="text-left space-y-2 mb-6">
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Unlimited Projects</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>2,000 Monthly Coins</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>VIP Support</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Custom Domain</li>
+                    </ul>
+                    <a href="/register.html" class="block w-full py-2 bg-yellow-600 rounded-lg hover:bg-yellow-700 transition">Upgrade - KES 1,499</a>
+                </div>
+
+                <!-- ULTIMATE Tier -->
+                <div class="bg-gradient-to-br from-gray-800 to-red-900 rounded-xl p-6 text-center border-2 border-red-500">
+                    <h3 class="text-2xl font-bold text-red-400 mb-2">ULTIMATE</h3>
+                    <div class="text-4xl font-bold">KES 4,999</div>
+                    <div class="text-gray-400 text-sm mb-4">/month</div>
+                    <ul class="text-left space-y-2 mb-6">
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Unlimited Projects</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>10,000 Monthly Coins</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Direct Line to Bruce</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Ultimate Badge</li>
+                    </ul>
+                    <a href="/register.html" class="block w-full py-2 bg-red-600 rounded-lg hover:bg-red-700 transition">Go Ultimate</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Coin Packages Section -->
+    <section class="py-24">
+        <div class="container mx-auto px-6">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold mb-4">Coin Packages</h2>
+                <p class="text-gray-400">Buy coins starting from just KES 50</p>
+            </div>
+            <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div class="bg-gray-800 rounded-xl p-6 text-center border-2 border-green-500">
+                    <div class="text-4xl font-bold text-green-400">KES 50</div>
+                    <div class="text-2xl font-bold mt-2">100 Coins</div>
+                    <div class="text-sm text-gray-400">0.50 KES/coin</div>
+                    <div class="mt-4 text-green-400">= 4 Deployments!</div>
+                    <a href="/register.html" class="mt-4 block w-full bg-green-600 px-4 py-2 rounded-lg hover:bg-green-700 transition">Buy Now - M-Pesa</a>
+                </div>
+
+                <div class="bg-gray-800 rounded-xl p-6 text-center border-2 border-purple-500 relative">
+                    <div class="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-purple-500 text-white px-3 py-1 rounded-full text-xs">MOST POPULAR</div>
+                    <div class="text-4xl font-bold text-purple-400">KES 200</div>
+                    <div class="text-2xl font-bold mt-2">650 Coins</div>
+                    <div class="text-sm text-gray-400">0.31 KES/coin</div>
+                    <div class="mt-2 text-green-400">+50 FREE BONUS!</div>
+                    <div class="text-sm">= 26 Deployments!</div>
+                    <a href="/register.html" class="mt-4 block w-full bg-purple-600 px-4 py-2 rounded-lg hover:bg-purple-700 transition">Buy Now - M-Pesa</a>
+                </div>
+
+                <div class="bg-gray-800 rounded-xl p-6 text-center border-2 border-yellow-500">
+                    <div class="text-4xl font-bold text-yellow-400">KES 1,000</div>
+                    <div class="text-2xl font-bold mt-2">3,750 Coins</div>
+                    <div class="text-sm text-gray-400">0.27 KES/coin</div>
+                    <div class="mt-2 text-green-400">+250 FREE BONUS!</div>
+                    <div class="text-sm">= 150 Deployments!</div>
+                    <a href="/register.html" class="mt-4 block w-full bg-yellow-600 px-4 py-2 rounded-lg hover:bg-yellow-700 transition">Buy Now - M-Pesa</a>
+                </div>
+
+                <div class="bg-gray-800 rounded-xl p-6 text-center border-2 border-blue-500">
+                    <div class="text-4xl font-bold text-blue-400">KES 5,000</div>
+                    <div class="text-2xl font-bold mt-2">22,000 Coins</div>
+                    <div class="text-sm text-gray-400">0.23 KES/coin</div>
+                    <div class="mt-2 text-green-400">+2,000 FREE BONUS!</div>
+                    <div class="text-sm">= 880 Deployments!</div>
+                    <a href="/register.html" class="mt-4 block w-full bg-blue-600 px-4 py-2 rounded-lg hover:bg-blue-700 transition">Buy Now - M-Pesa</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="gradient-bg py-20">
+        <div class="container mx-auto px-6 text-center">
+            <h2 class="text-4xl font-bold mb-4">Ready to Deploy Your First Bot?</h2>
+            <p class="text-xl mb-8 opacity-90">Join thousands of developers already using CloudHost</p>
+            <a href="/register.html" class="inline-block px-8 py-4 bg-white text-purple-600 rounded-lg text-lg font-semibold hover:bg-gray-100 transition">Get Started Free</a>
+            <p class="mt-4 text-sm opacity-75">No credit card required. FREE tier includes 3 projects.</p>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-gray-900 border-t border-gray-800 py-12">
+        <div class="container mx-auto px-6">
+            <div class="flex flex-col md:flex-row justify-between items-center">
+                <div class="flex items-center space-x-2 mb-4 md:mb-0">
+                    <div class="w-8 h-8 gradient-bg rounded-lg flex items-center justify-center">
+                        <span class="text-lg font-bold">C</span>
+                    </div>
+                    <span class="text-xl font-bold">CloudHost</span>
+                </div>
+                <div class="text-center text-gray-400">
+                    <p>Created by Bruce Bera | Contact: +254787527753 | Telegram: @brucebera | Email: bruce@cloudhost.app</p>
+                    <p class="text-sm mt-2">© 2024 CloudHost - The Greatest Hosting Platform in Human History. All rights reserved.</p>
+                </div>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>
